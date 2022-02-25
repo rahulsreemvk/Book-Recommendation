@@ -1,0 +1,191 @@
+# Creating class to find recommendations based on user choice
+class Recommendation:
+    def __init__(self):
+        pass
+# Function to create similarities between books and recommend books based on given ISBN
+    def get_booksimilarity(self, books, users, ratings, var, methd):
+        from sklearn.metrics.pairwise import cosine_similarity
+        from sklearn.metrics.pairwise import manhattan_distances
+        from sklearn.metrics.pairwise import euclidean_distances
+        from scipy.spatial import minkowski_distance
+        from sklearn.feature_extraction.text import CountVectorizer
+# Counting the ratings done by a particular user to filter our dataframe    
+        x = ratings['User-ID'].value_counts() > 14
+        y = x[x].index
+# Ignoring entries of users who haven't done atleast 14 ratings
+        ratings = ratings[ratings['User-ID'].isin(y)]
+
+# Merging ratings dataframe and books dataframe based on common ISBN
+        new_df = pd.merge(ratings, books, on='ISBN')
+# Dropping unwanted columns from our dataframe
+        new_df = new_df.drop(['Image-URL-S', 'Image-URL-M', 'Image-URL-L'], axis=1)
+
+# Creating a new dataframe and checking the number of ratings done by users for all the books
+        rating_count = new_df.groupby('Book-Title')['Book-Rating'].count().reset_index()
+        rating_count.rename(columns= {'Book-Rating':'Rating Count'}, inplace=True)
+        books_new = new_df.merge(rating_count, on='Book-Title')
+# Ignoring entries of books if they haven't received atleast 25 ratings
+        books_new = books_new[books_new['Rating Count'] >= 25]
+
+# Merging rows based on ISBN, creating a column with average rating for each books
+        booksnew = (books_new.groupby(by = ['ISBN'])['Book-Rating'].mean().reset_index()
+                    .rename(columns = {'Book-Rating': 'Avg-Rating'})[['ISBN', 'Avg-Rating']])
+
+# Merging books dataframe with our new dataframe and dropping unwanted columns
+        final_data = pd.merge(books, booksnew, on='ISBN')
+        final_data = final_data.drop(['Image-URL-S', 'Image-URL-M', 'Image-URL-L'], axis=1)
+
+# Creating a new column by combining book title, book author, year of publication, and average rating of each books to vectorize and analyze
+        final_data = final_data.drop_duplicates(subset='Book-Title', keep='first', inplace=False, ignore_index=True)
+        final_data = final_data.assign(CombinedData = final_data['Book-Title'].astype(str) + ' ' + 
+                                       final_data['Book-Author'].astype(str) + ' ' + 
+                                       final_data['Year-Of-Publication'].astype(str) + ' ' + 
+                                       final_data.Publisher.astype(str) + ' ' + 
+                                       final_data['Avg-Rating'].astype(str))
+
+# Vectorizing the combined data column of our final dataframe and creating a matrix using countvectorizer
+        booksmatrix = CountVectorizer().fit_transform(final_data['CombinedData'])
+
+# Checking user preference to find similarity
+        if methd=='cosine':
+            cossim = cosine_similarity(booksmatrix)
+        elif methd=='manhattan':
+            cossim = manhattan_distances(booksmatrix)
+        elif methd=='euclidean':
+            cossim = euclidean_distances(booksmatrix)
+        else:
+            print('Unkown Method')
+
+        book_id = final_data.index[final_data["ISBN"] == var]
+
+# Finding distances from the output of inbuilt function used
+        scores = list(enumerate(cossim[book_id[0]]))
+
+#Sort the list of similar books in descending order
+        sorted_scores = sorted(scores, key = lambda x:x[1], reverse=True)
+#Eliminate first score, because it is the value of our input
+        sorted_scores = sorted_scores[1:]
+
+# Printing output
+        k = 0
+        for item in sorted_scores:
+            location = item[0]
+            if k==0:
+                print('The 5 most similar books to ', final_data['Book-Title'][location], 'are:\n')
+            else:
+                print(k,' ', final_data['Book-Title'][location])
+            if k >= 5:
+                break
+            k = k+1
+
+# Function to find similarity between users and to output similar users
+    def get_usersimilarity(self, books, users, ratings, var, option, methd):
+        
+# Importing scipi and sklearn libraries
+        from scipy.sparse import csr_matrix
+        from sklearn.neighbors import NearestNeighbors
+    
+# Merging ratings and users dataframes based on user ids
+        rating_n_user = pd.merge(ratings, users, on='User-ID')
+        rating_n_user = rating_n_user.dropna(axis = 0, subset = ['User-ID'])
+        rating_n_user = rating_n_user.drop(['Age'], axis = 1)
+
+# Checking  book rating count and ignoring books that are not even got 350 ratings
+        urating_count = rating_n_user.groupby('User-ID')['Book-Rating'].count().reset_index()
+        urating_count.rename(columns={'Book-Rating':'Rating Count'}, inplace=True)
+        ufinal_rating = rating_n_user.merge(urating_count, left_on='User-ID', right_on='User-ID', how = 'left')
+        ufinal_rating = ufinal_rating[ufinal_rating['Rating Count'] >= 350]
+
+# Creating a pivot table where columns are ISBN of books, indices are UserIDs and values are ratings of corresponding books
+        user_pivot = ufinal_rating.pivot_table(columns='ISBN', index='User-ID', values='Book-Rating')
+# Filling empty value of pivot table with zero
+        user_pivot.fillna(0, inplace=True)
+
+# Creating a sparse matrix from the pivot table created using csr_matrix method
+        user_sparse = csr_matrix(user_pivot)
+
+# Using KNN to fit model and inputting the method chosen by user
+        model = NearestNeighbors(metric=methd, algorithm='brute')
+        model.fit(user_sparse)
+
+# Taking distance values with neighbors and recommendations based on distance 
+        distance, recommendation = model.kneighbors(user_pivot.loc[var, :].values.reshape(1,-1), n_neighbors = 6)
+# If user wants to get similar users based on a given User ID
+        if option==2:
+            i=0
+#         Printing output of similar users based on given UserID
+            for i in range(len(recommendation[0])):
+                if i==0:
+                    print('Users similar to the given UserID:', user_pivot.index[recommendation[0][i]], 'are:\n')
+                    print('   User ID\tDistance')
+                else:
+                    print(i,' ', user_pivot.index[recommendation[0][i]],'\t',round(distance[0][i],2))
+                    
+# If user wants to get book recommendations based on a given User ID
+        elif option==3:
+#         Creating an empty list to store index values of recommendations
+            buk_choice = []
+            i=1
+            for i in range(len(recommendation[0])):
+                buk_choice.append(user_pivot.index[recommendation[0][i]])
+#         Returns final dataframe and the index values list back to the recommendation function
+            return ufinal_rating, buk_choice
+
+# If there is an invalid choice function will return zero
+        else:
+            return(0)
+
+    def get_recommendation(self, b, u, r, v, o, m):
+        from sklearn.metrics.pairwise import cosine_similarity
+        from sklearn.feature_extraction.text import CountVectorizer
+# If user wants to find similar books based on a given ISBN
+        if o==1:
+            self.get_booksimilarity(b, u, r, v, m)
+# If user wants to find similar users based on a given User ID
+        elif o==2:
+            self.get_usersimilarity(b, u, r, v, o, m)
+# If user wants to get book recommendations based on a given User ID
+        elif o==3:
+#         fetching manipulated dataframe and book choices from get_usersimilarity function
+            ufin_dat, book_choices = self.get_usersimilarity(b, u, r, v, o, m)
+
+# Creating an empty dataframe to store User IDs based on index values stored in list from the manipulated dataframe
+            new_data1 = pd.DataFrame(columns = ['User-ID', 'ISBN', 'Book-Rating', 'Location', 'Rating Count'])
+            for ids in book_choices:
+                new_data = ufin_dat[ufin_dat['User-ID'] == ids]
+                new_data1 = new_data1.append(new_data)
+
+# Removing unwanted columns from the new dataframe
+            new_data1 = new_data1.drop(['Location', 'Rating Count'], axis=1)
+
+# Splitting the dataframe into two dataframes with one containing data of user given user and other containing data of similar users
+# 'check_data' dataframe contains data of user given User ID
+# 'new_data1' dataframe contains data of all other similar User IDs found using KNN
+            check_data = new_data1.loc[(new_data1['User-ID']==book_choices[0])]
+            new_data1 = new_data1.loc[(new_data1['User-ID']!=book_choices[0])]
+
+# Removing books of user given User ID from the list of books of similar User IDs
+            new_data1['Condition'] = new_data1['ISBN'].isin(check_data['ISBN'])
+            new_data1 = new_data1.loc[(new_data1['Condition']==False)]
+            new_data1 = new_data1.drop(['Condition'], axis=1)
+# Sorting the final dataframe in descending order based on book ratings
+            new_data1 = new_data1.sort_values(by=['Book-Rating'], ascending=False)
+
+# Creating a list of first few ISBNs from the sorted dataframe
+            isbn_search = new_data1['ISBN'].head(35).tolist()
+
+# Getting titles of books from the list, retrieving book titles and printing the output
+            print('Book recommendations based on User ID',v, 'are:')
+            isbns = b['ISBN'].tolist()
+            c = 0
+            counter = 0
+            for items in isbn_search:    
+                for c in range(len(isbns)):
+                    if isbns[c] == items:
+                        counter = counter+1
+                        print(counter,' ', b['Book-Title'][c])
+                    if counter>4:
+                        break
+
+        else:
+            print('Empty')
