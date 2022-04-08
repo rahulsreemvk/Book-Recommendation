@@ -6,3 +6,5 @@ Read data from three different files named books.csv, users.csv and ratings.csv.
 3.Find book recommendations for a given user ID.
 
 Different distance matrices are implemented and user can select which distance funcion to be used.
+
+Implemented accuracy check and comparison of different distance metrices used.
